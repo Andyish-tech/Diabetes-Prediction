@@ -1,66 +1,92 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.preprocessing import StandardScaler
-import joblib
 import os
+import joblib
 
-def check_and_impute(df, col_name):
-    # Impute missing values with group median based on 'Outcome'
-    df[col_name] = df[col_name].fillna(df.groupby('Outcome')[col_name].transform('median'))
-    return df
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
 def train_model():
     print("Loading data...")
-    # Load dataset
+    # 2. Load dataset
     data_path = os.path.join(os.path.dirname(__file__), '..', 'diabetes.csv')
-    df = pd.read_csv(data_path)
+    data = pd.read_csv(data_path)
 
-    print("Preprocessing...")
-    # Replace valid 0 values with NaN for specific columns
-    cols_with_invalid_zeros = ['Glucose', 'BloodPressure', 'SkinThickness', 'Insulin', 'BMI']
-    df[cols_with_invalid_zeros] = df[cols_with_invalid_zeros].replace(0, np.nan)
+    print("Data Cleaning...")
+    # 3. Data Cleaning (Improved)
+    cols_with_zero_as_missing = [
+        'Glucose', 'BloodPressure', 'BMI', 'Insulin', 'SkinThickness'
+    ]
 
-    # Impute missing values
-    for col in cols_with_invalid_zeros:
-        df = check_and_impute(df, col)
+    # Replace invalid zeros with NaN
+    data[cols_with_zero_as_missing] = data[cols_with_zero_as_missing].replace(0, np.nan)
+
+    # Fill missing values using MEDIAN per class (better medical logic)
+    for col in cols_with_zero_as_missing:
+        data[col] = data.groupby('Outcome')[col].transform(
+            lambda x: x.fillna(x.median())
+        )
         
-    # Extra fallback if 'Outcome' grouping caused NaN (should not happen in this dataset)
-    df.fillna(df.median(), inplace=True)
+    # Fallback just in case some NaN remain if grouping caused an issue
+    data.fillna(data.median(), inplace=True)
 
     print("Feature Engineering...")
-    # Feature engineering: BMI x Age, Glucose x BMI
-    df['BMI_Age'] = df['BMI'] * df['Age']
-    df['Glucose_BMI'] = df['Glucose'] * df['BMI']
+    # 4. Feature Engineering
+    data['BMI_Age'] = data['BMI'] * data['Age']
+    data['Glucose_BMI'] = data['Glucose'] * data['BMI']
 
-    # Splitting features and target
-    X = df.drop('Outcome', axis=1)
-    y = df['Outcome']
+    # 5. Split features & target
+    X = data.drop('Outcome', axis=1)
+    y = data['Outcome']
 
-    print("Splitting and Scaling...")
-    # Train-test split (80/20, Stratified)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-    
-    # Scale variables
+    print("Splitting...")
+    # 6. Train/Test Split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size=0.2,
+        random_state=42,
+        stratify=y
+    )
+
+    print("Scaling...")
+    # 7. Scaling
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
 
-    print("Training Model...")
-    # Train Gradient Boosting Classifier
-    model = GradientBoostingClassifier(random_state=42)
-    model.fit(X_train_scaled, y_train)
+    print("Training Model with GridSearchCV...")
+    # 8. Model: Gradient Boosting (BEST CHOICE)
+    param_grid = {
+        'n_estimators': [200, 300, 400],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'max_depth': [2, 3, 4]
+    }
 
-    accuracy = model.score(X_test_scaled, y_test)
-    print(f"Model Accuracy: {accuracy:.4f}")
+    grid = GridSearchCV(
+        GradientBoostingClassifier(),
+        param_grid,
+        cv=5,
+        scoring='accuracy',
+        n_jobs=-1
+    )
 
-    print("Saving Models...")
+    grid.fit(X_train, y_train)
+    best_model = grid.best_estimator_
+
+    print("\n=== MODEL PERFORMANCE ===")
+    y_pred = best_model.predict(X_test)
+    print("Accuracy:", accuracy_score(y_test, y_pred))
+    print("\nConfusion Matrix:\n", confusion_matrix(y_test, y_pred))
+    print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+    print("\nSaving Models...")
     # Save Model and Scaler
     model_path = os.path.join(os.path.dirname(__file__), 'model.pkl')
     scaler_path = os.path.join(os.path.dirname(__file__), 'scaler.pkl')
     
-    joblib.dump(model, model_path)
+    joblib.dump(best_model, model_path)
     joblib.dump(scaler, scaler_path)
     print(f"Model saved to {model_path}")
     print(f"Scaler saved to {scaler_path}")
